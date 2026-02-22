@@ -1,10 +1,12 @@
+"use client";
+
 import { Layers } from "lucide-react";
 import { AudioPanel } from "@/components/workspace/AudioPanel";
 import { VisualsPanel } from "@/components/workspace/VisualsPanel";
 import { TextPanel } from "@/components/workspace/TextPanel";
 import { ExportPanel } from "@/components/workspace/ExportPanel";
 import { PreviewCanvas } from "@/components/workspace/PreviewCanvas";
-import { Timeline } from "@/components/workspace/Timeline";
+
 
 export default function Home() {
   return (
@@ -45,10 +47,9 @@ export default function Home() {
           <PreviewCanvas />
         </div>
 
-      </main>
 
-      {/* Bottom Section: Timeline */}
-      <Timeline />
+
+      </main>
 
     </div>
   );

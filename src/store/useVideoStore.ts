@@ -11,12 +11,16 @@ export interface VisualSettings {
     backgroundGradient: string;
     backgroundMediaUrl: string | null;
     blurAmount: number;
+    aspectRatio: 'portrait' | 'landscape';
 }
 
 export interface AudioSettings {
     sourceUrl: string | null;
     sourceType: 'youtube' | 'upload' | null;
     volume: number;
+    durationInSeconds: number;
+    trimStart: number;
+    trimEnd: number;
 }
 
 export interface TextSettings {
@@ -26,6 +30,8 @@ export interface TextSettings {
     activeWordColor: string;
     positionY: number;
     words: WordTimestamp[];
+    manualText: string;
+    transcriptVersion: number;
 }
 
 export interface ExportSettings {
@@ -38,6 +44,8 @@ interface VideoState {
     visuals: VisualSettings;
     audio: AudioSettings;
     text: TextSettings;
+    currentFrame: number;
+    isPlaying: boolean;
     exportOptions: ExportSettings;
 
     // Actions
@@ -45,6 +53,8 @@ interface VideoState {
     setAudio: (audio: Partial<AudioSettings>) => void;
     setText: (text: Partial<TextSettings>) => void;
     setExportOptions: (options: Partial<ExportSettings>) => void;
+    setCurrentFrame: (frame: number) => void;
+    setIsPlaying: (playing: boolean) => void;
 }
 
 export const useVideoStore = create<VideoState>((set) => ({
@@ -54,11 +64,15 @@ export const useVideoStore = create<VideoState>((set) => ({
         backgroundGradient: 'linear-gradient(to right, #000000, #434343)',
         backgroundMediaUrl: null,
         blurAmount: 0,
+        aspectRatio: 'portrait',
     },
     audio: {
         sourceUrl: null,
         sourceType: null,
         volume: 100,
+        durationInSeconds: 15, // Default fallback
+        trimStart: 0,
+        trimEnd: 15,
     },
     text: {
         fontFamily: 'cairo',
@@ -67,14 +81,39 @@ export const useVideoStore = create<VideoState>((set) => ({
         activeWordColor: '#eab308', // primary gold
         positionY: 50, // 50% from top
         words: [],
+        manualText: '',
+        transcriptVersion: 0,
     },
+    currentFrame: 0,
+    isPlaying: false,
     exportOptions: {
         quality: '1080p',
         format: 'mp4',
     },
 
     setVisuals: (newVisuals) => set((state) => ({ visuals: { ...state.visuals, ...newVisuals } })),
-    setAudio: (newAudio) => set((state) => ({ audio: { ...state.audio, ...newAudio } })),
+    setAudio: (newAudio) => set((state) => {
+        const duration = newAudio.durationInSeconds;
+        const safeDuration = (duration && !isNaN(duration) && isFinite(duration)) ? duration : state.audio.durationInSeconds;
+
+        const updatedAudio = {
+            ...state.audio,
+            ...newAudio,
+            durationInSeconds: safeDuration
+        };
+
+        // If duration changed significantly and trimEnd is at default/old duration, update it
+        if (newAudio.durationInSeconds && !isNaN(newAudio.durationInSeconds)) {
+            if (state.audio.trimEnd === state.audio.durationInSeconds || state.audio.trimEnd === 15) {
+                updatedAudio.trimEnd = newAudio.durationInSeconds;
+            }
+        }
+        return { audio: updatedAudio };
+    }),
     setText: (newText) => set((state) => ({ text: { ...state.text, ...newText } })),
-    setExportOptions: (newOptions) => set((state) => ({ exportOptions: { ...state.exportOptions, ...newOptions } })),
+    setExportOptions: (newOptions) => set((state) => ({
+        exportOptions: { ...state.exportOptions, ...newOptions }
+    })),
+    setCurrentFrame: (frame) => set({ currentFrame: frame }),
+    setIsPlaying: (playing) => set({ isPlaying: playing }),
 }));

@@ -1,4 +1,5 @@
-import { AbsoluteFill, useVideoConfig, useCurrentFrame, Sequence, Audio, Img } from "remotion";
+"use client";
+import { AbsoluteFill, useVideoConfig, useCurrentFrame, Sequence, Audio } from "remotion";
 import React from "react";
 import { BackgroundType } from "@/store/useVideoStore";
 
@@ -11,10 +12,13 @@ export interface ReelsCompositionProps {
         backgroundGradient: string;
         backgroundMediaUrl: string | null;
         blurAmount: number;
+        aspectRatio: 'portrait' | 'landscape';
     };
     audio: {
         sourceUrl: string | null;
         volume: number;
+        trimStart: number;
+        trimEnd: number;
     };
     text: {
         fontFamily: string;
@@ -25,12 +29,30 @@ export interface ReelsCompositionProps {
     };
     // Future: Add transcription words array here
     words?: WordTimestamp[];
+    transcriptVersion?: number;
 }
 
-export const ReelsComposition: React.FC<ReelsCompositionProps> = ({ visuals, audio, text, words = [] }) => {
+const WordSpan: React.FC<{ text: string, isActive: boolean, activeColor: string, inactiveColor: string }> = React.memo(({ text, isActive, activeColor, inactiveColor }) => {
+    return (
+        <span
+            style={{
+                color: isActive ? activeColor : inactiveColor,
+                transform: isActive ? 'scale(1.1)' : 'scale(1)',
+                transition: 'all 0.1s ease',
+            }}
+        >
+            {text}
+        </span>
+    );
+});
+
+export const ReelsComposition: React.FC<ReelsCompositionProps> = ({ visuals, audio, text, words = [], transcriptVersion = 0 }) => {
     const { fps, durationInFrames, width, height } = useVideoConfig();
     const frame = useCurrentFrame();
-    const currentTimeInSeconds = frame / fps;
+
+    // We calculate current time but OFFSET by the trimStart so the logic thinks 
+    // we are at the correct absolute position in the audio file for words.
+    const currentTimeInSeconds = (frame / fps) + (audio.trimStart || 0);
 
     const getBackgroundStyle = () => {
         switch (visuals.backgroundType) {
@@ -44,13 +66,51 @@ export const ReelsComposition: React.FC<ReelsCompositionProps> = ({ visuals, aud
         }
     };
 
+    // --- Word Chunking Logic ---
+    const wordsPerChunk = 5; // Display up to 5 words at a time
+
+    // Group words into chunks
+    const chunks = React.useMemo(() => {
+        const result: WordTimestamp[][] = [];
+        for (let i = 0; i < words.length; i += wordsPerChunk) {
+            result.push(words.slice(i, i + wordsPerChunk));
+        }
+        return result;
+    }, [words]);
+
+    // Determine which chunk should be visible based on current time
+    const activeChunk = React.useMemo(() => {
+        if (chunks.length === 0) return null;
+
+        for (let i = 0; i < chunks.length; i++) {
+            const chunk = chunks[i];
+            const nextChunk = chunks[i + 1];
+
+            const start = chunk[0].start;
+            // The chunk stays visible until the NEXT chunk starts, 
+            // or if it's the last chunk, it stays for 2 seconds after it ends.
+            const end = nextChunk ? nextChunk[0].start : chunk[chunk.length - 1].end + 2;
+
+            if (currentTimeInSeconds >= start && currentTimeInSeconds < end) {
+                return chunk;
+            }
+        }
+
+        // Sneak peek: if we are within 1 second of the first word, show the first chunk early
+        if (chunks[0] && currentTimeInSeconds >= chunks[0][0].start - 1 && currentTimeInSeconds < chunks[0][0].start) {
+            return chunks[0];
+        }
+
+        return null;
+    }, [chunks, currentTimeInSeconds]);
+
     return (
         <AbsoluteFill style={getBackgroundStyle()}>
 
             {/* Background Media */}
             {(visuals.backgroundType === 'image' || visuals.backgroundType === 'video') && visuals.backgroundMediaUrl && (
                 <AbsoluteFill>
-                    <Img
+                    <img
                         src={visuals.backgroundMediaUrl}
                         style={{
                             width: '100%',
@@ -70,13 +130,17 @@ export const ReelsComposition: React.FC<ReelsCompositionProps> = ({ visuals, aud
             {/* Audio Track */}
             {audio.sourceUrl && (
                 <Sequence from={0} durationInFrames={durationInFrames}>
-                    {/* For now, we assume the sourceUrl is an actual audio file link for testing */}
-                    <Audio src={audio.sourceUrl} volume={audio.volume / 100} />
+                    <Audio
+                        src={audio.sourceUrl}
+                        volume={audio.volume / 100}
+                        startFrom={Math.floor((audio.trimStart || 0) * fps)}
+                        endAt={Math.floor((audio.trimEnd || 1000) * fps)}
+                    />
                 </Sequence>
             )}
 
             {/* Captions Text */}
-            {words.length > 0 ? (
+            {activeChunk ? (
                 <AbsoluteFill
                     style={{
                         justifyContent: 'center',
@@ -100,26 +164,30 @@ export const ReelsComposition: React.FC<ReelsCompositionProps> = ({ visuals, aud
                         display: 'flex',
                         flexWrap: 'wrap',
                         justifyContent: 'center',
-                        gap: '8px'
+                        gap: '16px', // Increased gap for better breathing room
+                        rowGap: '20px'
                     }}>
-                        {words.map((word, i) => {
+                        {activeChunk.map((word, i) => {
                             // Check if this word is currently being spoken
                             const isActive = currentTimeInSeconds >= word.start && currentTimeInSeconds <= word.end;
+                            // Unique key combining index and transcriptVersion to ensure stable focus if needed, 
+                            // but here it's for rendering stability.
+                            const wordKey = `word-${i}-${transcriptVersion}`;
+
                             return (
-                                <span
-                                    key={i}
-                                    style={{
-                                        color: isActive ? text.activeWordColor : text.textColor,
-                                        transform: isActive ? 'scale(1.1)' : 'scale(1)',
-                                    }}
-                                >
-                                    {word.text}
-                                </span>
+                                <div key={wordKey} style={{ margin: '0 4px' }}>
+                                    <WordSpan
+                                        text={word.text}
+                                        isActive={isActive}
+                                        activeColor={text.activeWordColor}
+                                        inactiveColor={text.textColor}
+                                    />
+                                </div>
                             );
                         })}
                     </div>
                 </AbsoluteFill>
-            ) : (
+            ) : words.length === 0 ? (
                 <AbsoluteFill
                     style={{
                         justifyContent: 'center',
@@ -145,7 +213,7 @@ export const ReelsComposition: React.FC<ReelsCompositionProps> = ({ visuals, aud
                         <span style={{ color: text.activeWordColor }}>أضف</span> الصوت للحصول على نص
                     </div>
                 </AbsoluteFill>
-            )}
+            ) : null}
 
         </AbsoluteFill>
     );

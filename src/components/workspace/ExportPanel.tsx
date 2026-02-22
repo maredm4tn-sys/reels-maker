@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useVideoStore } from "@/store/useVideoStore";
-import { Download, CheckCircle2, AlertCircle } from "lucide-react";
+import { Download, CheckCircle2, AlertCircle, Loader2, Terminal } from "lucide-react";
 import { Panel } from "./AudioPanel";
 
 export function ExportPanel() {
@@ -13,18 +13,20 @@ export function ExportPanel() {
     const [progress, setProgress] = useState(0);
     const [renderStatus, setRenderStatus] = useState<'idle' | 'processing' | 'success' | 'error'>('idle');
     const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+    const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
+    const [isSnapshotting, setIsSnapshotting] = useState(false);
 
     // Get full state to send to renderer
     const visuals = useVideoStore((state) => state.visuals);
     const audio = useVideoStore((state) => state.audio);
     const text = useVideoStore((state) => state.text);
+    const currentFrame = useVideoStore((state) => state.currentFrame);
 
     // Simulate rendering progress bar visually while server processes
     useEffect(() => {
         if (isRendering && renderStatus === 'processing') {
             const interval = setInterval(() => {
                 setProgress((prev) => {
-                    // Stop at 95% and wait for server to finish
                     if (prev >= 95) return 95;
                     const increment = prev < 50 ? Math.random() * 8 : Math.random() * 3;
                     return Math.min(prev + increment, 95);
@@ -36,13 +38,18 @@ export function ExportPanel() {
     }, [isRendering, renderStatus]);
 
     const handleExport = async () => {
+        // 0. Pre-export validation for server-side rendering
+        if (audio.sourceUrl?.startsWith('blob:') || visuals.backgroundMediaUrl?.startsWith('blob:')) {
+            alert("⚠️ تنبيه: بعض الملفات (الصوت أو الخلفية) مخزنة محلياً فقط ولم ترفع للسيرفر بعد. يرجى إعادة رفعها أو التأكد من اكتمال الرفع لتتمكن من تصدير الـ MP4.");
+            return;
+        }
+
         setRenderStatus('processing');
         setIsRendering(true);
         setProgress(0);
         setDownloadUrl(null);
 
         try {
-            // 1. Send all state to our backend API to render
             const res = await fetch('/api/render', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -52,19 +59,46 @@ export function ExportPanel() {
             const data = await res.json();
 
             if (data.success) {
-                // 2. Setup the final success UI
                 setProgress(100);
                 setRenderStatus('success');
                 setDownloadUrl(data.downloadUrl);
             } else {
                 setRenderStatus('error');
+                console.error("Render failed:", data.error);
+                if (!data.error?.toLowerCase().includes("ffmpeg")) {
+                    alert(data.error || "حدث خطأ غير متوقع أثناء التصدير.");
+                }
             }
-
         } catch (e) {
             console.error(e);
             setRenderStatus('error');
+            alert("فشل الاتصال بخادم التصدير.");
         } finally {
             setIsRendering(false);
+        }
+    };
+
+    const handleSnapshot = async () => {
+        setIsSnapshotting(true);
+        setSnapshotUrl(null);
+        try {
+            const res = await fetch('/api/thumbnail', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ visuals, audio, text, frame: currentFrame })
+            });
+            const data = await res.json();
+            if (data.success) {
+                setSnapshotUrl(data.imageUrl);
+            } else {
+                console.error("Snapshot failed:", data.error);
+                alert(data.error || "فشل إنشاء لقطة المعاينة.");
+            }
+        } catch (e) {
+            console.error(e);
+            alert("فشل الاتصال بخادم المعاينة.");
+        } finally {
+            setIsSnapshotting(false);
         }
     };
 
@@ -74,11 +108,16 @@ export function ExportPanel() {
         setDownloadUrl(null);
     };
 
+    const handleDownload = () => {
+        if (downloadUrl) {
+            window.open(downloadUrl, '_blank');
+        }
+    };
+
     return (
         <Panel title="إعدادات التصدير" icon={<Download className="w-4 h-4 text-primary" />}>
             <div className="space-y-5">
 
-                {/* Render Settings (Hide during processing) */}
                 {renderStatus === 'idle' && (
                     <>
                         <div>
@@ -99,17 +138,43 @@ export function ExportPanel() {
                             </div>
                         </div>
 
-                        <button
-                            onClick={handleExport}
-                            className="w-full bg-primary/90 hover:bg-primary text-surface py-3 rounded-lg font-bold text-sm transition-all shadow-[0_4px_14px_0_rgba(234,179,8,0.39)] hover:shadow-[0_6px_20px_rgba(234,179,8,0.23)] hover:-translate-y-0.5 flex items-center justify-center gap-2"
-                        >
-                            <Download className="w-5 h-5" />
-                            تصدير الفيديو (MP4)
-                        </button>
+                        <div className="grid grid-cols-2 gap-3">
+                            <button
+                                onClick={handleSnapshot}
+                                disabled={isSnapshotting}
+                                className="w-full bg-surface border border-border hover:border-primary/50 text-gray-300 py-3 rounded-lg font-bold text-xs transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                            >
+                                {isSnapshotting ? (
+                                    <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                                ) : (
+                                    <Download className="w-4 h-4 text-primary" />
+                                )}
+                                التقاط صورة معاينة
+                            </button>
+                            <button
+                                onClick={handleExport}
+                                className="w-full bg-primary/90 hover:bg-primary text-surface py-3 rounded-lg font-bold text-xs transition-all shadow-[0_4px_14px_0_rgba(234,179,8,0.39)] hover:shadow-[0_6px_20px_rgba(234,179,8,0.23)] hover:-translate-y-0.5 flex items-center justify-center gap-2"
+                            >
+                                <Download className="w-5 h-5" />
+                                تصدير فيديو MP4
+                            </button>
+                        </div>
+
+                        {snapshotUrl && (
+                            <div className="mt-4 p-2 bg-surface rounded-lg border border-primary/20 animate-in fade-in slide-in-from-top-2 duration-500">
+                                <p className="text-[10px] text-primary font-bold mb-2 text-center">لقطة المعاينة (جودة عالية)</p>
+                                <img src={snapshotUrl} alt="Video Snapshot" className="w-full aspect-[9/16] rounded-md border border-border shadow-lg mb-2" />
+                                <button
+                                    onClick={() => window.open(snapshotUrl, '_blank')}
+                                    className="w-full text-[10px] text-muted-foreground hover:text-white underline transition-colors"
+                                >
+                                    فتح الصورة في نافذة جديدة
+                                </button>
+                            </div>
+                        )}
                     </>
                 )}
 
-                {/* Rendering State Overlay/Section */}
                 {renderStatus !== 'idle' && (
                     <div className="bg-background/80 border border-border p-4 rounded-xl flex flex-col items-center justify-center text-center space-y-4 py-8">
 
@@ -123,9 +188,9 @@ export function ExportPanel() {
                                     <span className="absolute text-xs font-bold text-gray-200">{Math.round(progress)}%</span>
                                 </div>
                                 <div>
-                                    <h3 className="text-sm font-bold text-primary mb-1">جاري معالجة الفيديو...</h3>
+                                    <h3 className="text-sm font-bold text-primary mb-1">جاري معالجة الفيديو الحقيقي...</h3>
                                     <p className="text-xs text-muted-foreground w-48 text-balance">
-                                        يرجى عدم إغلاق هذه الصفحة حتى تكتمل عملية التصدير بجودة {exportOptions.quality}
+                                        يرجى الانتظار، نقوم الآن بعملية Rendering باستخدام Remotion Engine.
                                     </p>
                                 </div>
                             </>
@@ -137,59 +202,65 @@ export function ExportPanel() {
                                     <CheckCircle2 className="w-8 h-8" />
                                 </div>
                                 <div>
-                                    <h3 className="text-sm font-bold text-green-500 mb-1">تم إنشاء الفيديو بنجاح!</h3>
+                                    <h3 className="text-sm font-bold text-green-500 mb-1">اكتمل التصدير بنجاح!</h3>
                                     <p className="text-xs text-muted-foreground mb-4">
-                                        الفيديو جاهز الآن للتحميل والمشاركة
+                                        تم إنشاء ملف الـ MP4 بنجاح. يمكنك الآن تحميله على جهازك.
                                     </p>
                                 </div>
-                                <div className="w-full flex gap-2">
-                                    {downloadUrl ? (
-                                        <a
-                                            href={downloadUrl}
-                                            download="reels-video.mp4"
-                                            target="_blank"
-                                            rel="noreferrer"
-                                            onClick={() => {
-                                                setTimeout(resetExport, 1000);
-                                            }}
-                                            className="flex-1 bg-green-600 hover:bg-green-500 text-white py-2 rounded-md text-sm font-bold transition-colors flex justify-center items-center gap-2"
-                                        >
-                                            <Download className="w-4 h-4" />
-                                            تحميل الفيديو
-                                        </a>
-                                    ) : (
-                                        <button
-                                            disabled
-                                            className="flex-1 bg-green-600/50 text-white/50 py-2 rounded-md text-sm font-bold cursor-not-allowed"
-                                        >
-                                            تحميل الفيديو
-                                        </button>
-                                    )}
+                                <div className="w-full flex flex-col gap-2 mt-4">
+                                    <button
+                                        onClick={handleDownload}
+                                        className="w-full px-4 bg-green-500 hover:bg-green-600 text-white font-bold py-2 rounded-md text-sm transition-colors flex items-center justify-center gap-2"
+                                    >
+                                        <Download className="w-4 h-4" />
+                                        تحميل الفيديو الآن
+                                    </button>
                                     <button
                                         onClick={resetExport}
-                                        className="px-4 bg-surface border border-border text-gray-400 py-2 rounded-md text-sm hover:text-white transition-colors"
+                                        className="w-full px-4 bg-surface border border-border text-gray-400 hover:text-white font-bold py-2 rounded-md text-sm transition-colors"
                                     >
-                                        إغلاق
+                                        رجوع للإعدادات
                                     </button>
                                 </div>
                             </>
                         )}
 
                         {renderStatus === 'error' && (
-                            <>
-                                <div className="w-16 h-16 bg-red-500/20 text-red-500 rounded-full flex items-center justify-center mb-2">
+                            <div className="w-full flex flex-col items-center">
+                                <div className="w-16 h-16 bg-red-500/20 text-red-500 rounded-full flex items-center justify-center mb-4">
                                     <AlertCircle className="w-8 h-8" />
                                 </div>
-                                <h3 className="text-sm font-bold text-red-500 mb-1">حدث خطأ أثناء التصدير</h3>
+                                <h3 className="text-sm font-bold text-red-500 mb-2">حدث خطأ أثناء التصدير</h3>
+
+                                <div className="bg-red-500/5 p-4 rounded-lg border border-red-500/20 mb-4 text-right" dir="rtl">
+                                    <p className="text-[11px] text-gray-300 leading-relaxed mb-3">
+                                        المشكلة الأكثر شيوعاً هي عدم وجود أداة <b>ffmpeg</b> على جهازك.
+                                        لقد قمت بتجهيز نص برمجى (script) ليقوم بتحميلها لك تلقائياً.
+                                    </p>
+
+                                    <div className="bg-black/40 p-2 rounded border border-border/50 font-mono flex items-center gap-2 group cursor-pointer"
+                                        onClick={() => {
+                                            navigator.clipboard.writeText('powershell -ExecutionPolicy Bypass -File .\\setup-ffmpeg.ps1');
+                                            alert("تم نسخ الكود! افتح الـ Terminal والصقه هناك.");
+                                        }}>
+                                        <Terminal className="w-3 h-3 text-primary shrink-0" />
+                                        <code className="text-[9px] text-primary truncate overflow-hidden text-left" dir="ltr">
+                                            powershell -ExecutionPolicy Bypass -File .\setup-ffmpeg.ps1
+                                        </code>
+                                    </div>
+                                    <p className="text-[9px] text-muted-foreground mt-2">
+                                        انسخ الكود أعلاه وشغله في الـ Terminal (الشاشة السوداء) ثم أعد محاولة التصدير.
+                                    </p>
+                                </div>
+
                                 <button
                                     onClick={resetExport}
-                                    className="mt-2 text-xs text-gray-400 underline hover:text-white"
+                                    className="text-xs text-gray-400 hover:text-white underline decoration-dotted"
                                 >
-                                    حاول مرة أخرى
+                                    الرجوع وحاول مرة أخرى
                                 </button>
-                            </>
+                            </div>
                         )}
-
                     </div>
                 )}
             </div>
