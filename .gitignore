@@ -43,3 +43,6 @@ next-env.d.ts
 # user-generated assets
 /public/uploads/
 /public/renders/
+
+# binaries
+/bin/
